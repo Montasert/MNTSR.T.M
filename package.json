@@ -1,0 +1,12 @@
+{
+  "name": "mc-bedrock-player-bot",
+  "version": "1.0.0",
+  "description": "Minecraft Bedrock Player Bot - Microsoft Auth",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "bedrock-protocol": "^3.42.0"
+  }
+}
