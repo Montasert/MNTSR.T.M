@@ -34,7 +34,11 @@ function restoreSessionFromEnv() {
   }
 }
 
-function printSessionForEnv() {
+// يُخزَّن هنا بعد أول تسجيل دخول، ويُعرض عبر رابط ويب /cache
+// (النسخ من صفحة ويب بزر "نسخ" أوثق من تحديد سطر طويل داخل شاشة السجلات)
+let latestCacheString = null;
+
+function buildSessionCacheString() {
   if (!fs.existsSync(PROFILES_FOLDER)) return;
   const files = {};
   (function walk(dir, base) {
@@ -45,11 +49,9 @@ function printSessionForEnv() {
       else files[rel] = fs.readFileSync(full).toString('base64');
     }
   })(PROFILES_FOLDER, '');
-  const encoded = Buffer.from(JSON.stringify(files)).toString('base64');
-  console.log('\n================ انسخ السطر التالي بالكامل ================');
-  console.log('أضف متغير بيئة جديد في Render باسم MSA_CACHE وضع فيه هذه القيمة:');
-  console.log(encoded);
-  console.log('===============================================================\n');
+  latestCacheString = Buffer.from(JSON.stringify(files)).toString('base64');
+  console.log('\n✅ تم إنشاء بيانات الجلسة. افتح من متصفح هاتفك رابط خدمتك متبوعاً بـ /cache لنسخها.');
+  console.log('مثال: https://<اسم-خدمتك>.onrender.com/cache\n');
 }
 
 restoreSessionFromEnv();
@@ -70,7 +72,7 @@ const client = bedrock.createClient({
 client.on('session', () => {
   console.log('✅ تم ربط الحساب وتسجيل الدخول بنجاح.');
   if (!process.env.MSA_CACHE) {
-    printSessionForEnv();
+    buildSessionCacheString();
   }
 });
 
@@ -95,12 +97,42 @@ client.on('error', (err) => {
 });
 
 // ============================================
-// سيرفر HTTP بسيط جداً — فقط لإبقاء الاستضافة
-// المجانية (مثل Render) مستيقظة عبر خدمة بينغ
-// خارجية مثل UptimeRobot. لا يؤثر على أداء البوت.
+// سيرفر HTTP: يبقي Render مستيقظاً عبر UptimeRobot،
+// ويعرض صفحة /cache لنسخ بيانات الجلسة بأمان وسهولة.
 // ============================================
 const PORT = process.env.PORT || 3000;
+
 http.createServer((req, res) => {
+  if (req.url === '/cache') {
+    if (!latestCacheString) {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('لا توجد بيانات جلسة جاهزة بعد. سجّل الدخول أولاً، ثم أعد تحميل هذه الصفحة.');
+      return;
+    }
+    const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>نسخ بيانات الجلسة</title>
+<style>
+  body { font-family: sans-serif; padding: 16px; background:#111; color:#eee; }
+  textarea { width: 100%; height: 55vh; box-sizing: border-box; font-family: monospace;
+             font-size: 12px; padding: 8px; direction: ltr; }
+  button { width: 100%; padding: 14px; font-size: 16px; margin-top: 10px; }
+  p { line-height: 1.6; }
+</style></head>
+<body>
+  <p>1) اضغط الزر لنسخ النص كاملاً.<br>
+     2) الصقه في متغير بيئة باسم <b>MSA_CACHE</b> في Render.</p>
+  <textarea id="c" readonly>${latestCacheString}</textarea>
+  <button onclick="navigator.clipboard.writeText(document.getElementById('c').value).then(()=>alert('تم النسخ ✅'))">
+    نسخ النص كاملاً
+  </button>
+</body></html>`;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+    return;
+  }
+
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('البوت يعمل الآن ✅');
 }).listen(PORT, () => {
