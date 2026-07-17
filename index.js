@@ -97,6 +97,88 @@ client.on('error', (err) => {
 });
 
 // ============================================
+// الشات الذكي (Gemini API)
+// يرد فقط لما حد يذكر اسم البوت، بشخصية طبيعية
+// كإنسان عادي، مو ردود آلية جاهزة.
+// ============================================
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
+// شخصية البوت — عدّلها بحرية عن طريق متغير بيئة BOT_PERSONA
+const BOT_PERSONA = process.env.BOT_PERSONA ||
+  `أنت لاعب عادي بشخصية ${BOT_USERNAME} داخل سيرفر ماين كرافت. تتكلم بالعامية بشكل طبيعي جداً،
+مختصر (جملة أو جملتين كحد أقصى)، بدون أي أسلوب رسمي أو روبوتي، بدون تقديم نفسك كـ"مساعد ذكاء اصطناعي"
+أبداً. رد بروح مرحة وطبيعية زي أي شخص عادي يلعب ويحكي مع أصحابه.`;
+
+// ذاكرة قصيرة لكل لاعب — آخر عدة رسائل بس، حتى ما تكبر بلا داعي
+const chatHistory = new Map(); // playerName -> [{role, text}]
+const HISTORY_LIMIT = 6;
+
+// كولداون بسيط حتى ما يستهلك الحصة المجانية بسرعة لو الكل حكى بنفس الوقت
+let lastReplyAt = 0;
+const REPLY_COOLDOWN_MS = 4000;
+
+async function askAI(playerName, message) {
+  const history = chatHistory.get(playerName) || [];
+  const contents = [
+    { role: 'user', parts: [{ text: BOT_PERSONA }] },
+    { role: 'model', parts: [{ text: 'تمام، فهمت.' }] },
+    ...history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
+    { role: 'user', parts: [{ text: `${playerName}: ${message}` }] },
+  ];
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+      body: JSON.stringify({ contents }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Gemini API error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!reply) throw new Error('رد فارغ من الذكاء الاصطناعي');
+
+  const updated = [...history, { role: 'user', text: message }, { role: 'model', text: reply }];
+  chatHistory.set(playerName, updated.slice(-HISTORY_LIMIT));
+
+  return reply;
+}
+
+client.on('text', async (packet) => {
+  if (packet.type !== 'chat') return;
+  if (packet.source_name === BOT_USERNAME) return; // تجاهل رسائل البوت نفسه
+  if (!GEMINI_API_KEY) return; // ما فيه مفتاح بعد، تجاهل بصمت
+
+  const mentioned = packet.message?.toLowerCase().includes(BOT_USERNAME.toLowerCase());
+  if (!mentioned) return;
+
+  const now = Date.now();
+  if (now - lastReplyAt < REPLY_COOLDOWN_MS) return;
+  lastReplyAt = now;
+
+  try {
+    const reply = await askAI(packet.source_name, packet.message);
+    client.queue('text', {
+      type: 'chat',
+      needs_translation: false,
+      source_name: BOT_USERNAME,
+      xuid: '',
+      platform_chat_id: '',
+      filtered_message: '',
+      message: reply,
+    });
+  } catch (e) {
+    console.error('⚠️ خطأ في الشات الذكي:', e.message);
+  }
+});
+
+// ============================================
 // سيرفر HTTP: يبقي Render مستيقظاً عبر UptimeRobot،
 // ويعرض صفحة /cache لنسخ بيانات الجلسة بأمان وسهولة.
 // ============================================
