@@ -35,7 +35,6 @@ function restoreSessionFromEnv() {
 }
 
 // يُخزَّن هنا بعد أول تسجيل دخول، ويُعرض عبر رابط ويب /cache
-// (النسخ من صفحة ويب بزر "نسخ" أوثق من تحديد سطر طويل داخل شاشة السجلات)
 let latestCacheString = null;
 
 function buildSessionCacheString() {
@@ -51,70 +50,23 @@ function buildSessionCacheString() {
   })(PROFILES_FOLDER, '');
   latestCacheString = Buffer.from(JSON.stringify(files)).toString('base64');
   console.log('\n✅ تم إنشاء بيانات الجلسة. افتح من متصفح هاتفك رابط خدمتك متبوعاً بـ /cache لنسخها.');
-  console.log('مثال: https://<اسم-خدمتك>.onrender.com/cache\n');
 }
 
 restoreSessionFromEnv();
 
-console.log('=== بدء تشغيل البوت ===');
-console.log('عند ظهور رابط microsoft.com/link مع كود مكوّن من 8 أحرف بالأسفل،');
-console.log('افتحه من متصفح هاتفك وأدخل الكود لربط حسابك.\n');
-
-const client = bedrock.createClient({
-  host: SERVER_HOST,
-  port: SERVER_PORT,
-  username: BOT_USERNAME,
-  offline: false,        // false = مصادقة مايكروسوفت (يطبع الرابط والكود تلقائياً)
-  version: MC_VERSION,
-  profilesFolder: PROFILES_FOLDER,
-});
-
-client.on('session', () => {
-  console.log('✅ تم ربط الحساب وتسجيل الدخول بنجاح.');
-  if (!process.env.MSA_CACHE) {
-    buildSessionCacheString();
-  }
-});
-
-client.on('join', () => {
-  console.log('🚪 البوت في طور الانضمام للسيرفر...');
-});
-
-client.on('spawn', () => {
-  console.log('🎮 البوت الآن داخل السيرفر وظاهر في العالم.');
-});
-
-client.on('disconnect', (packet) => {
-  console.log('❌ تم فصل البوت. السبب:', packet?.reason || 'غير معروف');
-});
-
-client.on('kick', (reason) => {
-  console.log('⛔ تم طرد البوت من السيرفر:', reason);
-});
-
-client.on('error', (err) => {
-  console.error('⚠️ خطأ في الاتصال:', err.message);
-});
-
 // ============================================
 // الشات الذكي (Gemini API)
-// يرد فقط لما حد يذكر اسم البوت، بشخصية طبيعية
-// كإنسان عادي، مو ردود آلية جاهزة.
 // ============================================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
-// شخصية البوت — عدّلها بحرية عن طريق متغير بيئة BOT_PERSONA
 const BOT_PERSONA = process.env.BOT_PERSONA ||
   `أنت لاعب عادي بشخصية ${BOT_USERNAME} داخل سيرفر ماين كرافت. تتكلم بالعامية بشكل طبيعي جداً،
 مختصر (جملة أو جملتين كحد أقصى)، بدون أي أسلوب رسمي أو روبوتي، بدون تقديم نفسك كـ"مساعد ذكاء اصطناعي"
 أبداً. رد بروح مرحة وطبيعية زي أي شخص عادي يلعب ويحكي مع أصحابه.`;
 
-// ذاكرة قصيرة لكل لاعب — آخر عدة رسائل بس، حتى ما تكبر بلا داعي
 const chatHistory = new Map(); // playerName -> [{role, text}]
 const HISTORY_LIMIT = 6;
-
-// كولداون بسيط حتى ما يستهلك الحصة المجانية بسرعة لو الكل حكى بنفس الوقت
 let lastReplyAt = 0;
 const REPLY_COOLDOWN_MS = 4000;
 
@@ -150,33 +102,108 @@ async function askAI(playerName, message) {
   return reply;
 }
 
-client.on('text', async (packet) => {
-  if (packet.type !== 'chat') return;
-  if (packet.source_name === BOT_USERNAME) return; // تجاهل رسائل البوت نفسه
-  if (!GEMINI_API_KEY) return; // ما فيه مفتاح بعد، تجاهل بصمت
+// ============================================
+// إدارة الاتصال + إعادة الاتصال التلقائي
+// ============================================
+let client = null;
+let reconnectTimer = null;
+let hasSpawnedOnce = false; // نطبع رسائل تسجيل الدخول مرة وحدة بس
 
-  const mentioned = packet.message?.toLowerCase().includes(BOT_USERNAME.toLowerCase());
-  if (!mentioned) return;
+function scheduleReconnect(delayMs, reasonText) {
+  if (reconnectTimer) return; // في محاولة إعادة اتصال مجدولة أصلاً
+  console.log(`🔁 إعادة محاولة الاتصال خلال ${Math.round(delayMs / 1000)} ثانية بسبب: ${reasonText}`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectBot();
+  }, delayMs);
+}
 
-  const now = Date.now();
-  if (now - lastReplyAt < REPLY_COOLDOWN_MS) return;
-  lastReplyAt = now;
+function connectBot() {
+  console.log('=== محاولة الاتصال بالسيرفر ===');
 
-  try {
-    const reply = await askAI(packet.source_name, packet.message);
-    client.queue('text', {
-      type: 'chat',
-      needs_translation: false,
-      source_name: BOT_USERNAME,
-      xuid: '',
-      platform_chat_id: '',
-      filtered_message: '',
-      message: reply,
-    });
-  } catch (e) {
-    console.error('⚠️ خطأ في الشات الذكي:', e.message);
-  }
-});
+  client = bedrock.createClient({
+    host: SERVER_HOST,
+    port: SERVER_PORT,
+    username: BOT_USERNAME,
+    offline: false,
+    version: MC_VERSION,
+    profilesFolder: PROFILES_FOLDER,
+  });
+
+  client.on('session', () => {
+    console.log('✅ تم ربط الحساب وتسجيل الدخول بنجاح.');
+    if (!process.env.MSA_CACHE) buildSessionCacheString();
+  });
+
+  client.on('join', () => {
+    console.log('🚪 البوت في طور الانضمام للسيرفر...');
+  });
+
+  client.on('spawn', () => {
+    console.log('🎮 البوت الآن داخل السيرفر وظاهر في العالم.');
+    hasSpawnedOnce = true;
+    // بدون هذه الحزمة، السيرفر يبقي البوت بحالة "تحميل" دائمة
+    // من ناحية باقي اللاعبين حتى لو ظهر داخل العالم من ناحيته هو.
+    try {
+      client.queue('set_local_player_as_initialized', {
+        runtime_entity_id: client.entityId,
+      });
+      console.log('✅ تم تأكيد اندماج البوت بالعالم (set_local_player_as_initialized).');
+    } catch (e) {
+      console.error('⚠️ تعذّر إرسال تأكيد الاندماج:', e.message);
+    }
+  });
+
+  client.on('disconnect', (packet) => {
+    const reason = packet?.reason || 'غير معروف';
+    console.log('❌ تم فصل البوت. السبب:', reason);
+    // تعارض مؤقت بسبب إعادة نشر: ننتظر أطول شوي حتى تنغلق الجلسة القديمة تماماً
+    const delay = reason === 'server_id_conflict' ? 20000 : 10000;
+    scheduleReconnect(delay, reason);
+  });
+
+  client.on('kick', (reason) => {
+    console.log('⛔ تم طرد البوت من السيرفر:', reason);
+  });
+
+  client.on('error', (err) => {
+    console.error('⚠️ خطأ في الاتصال:', err.message);
+  });
+
+  client.on('text', async (packet) => {
+    if (packet.type !== 'chat') return;
+    if (packet.source_name === BOT_USERNAME) return;
+    if (!GEMINI_API_KEY) return;
+
+    const mentioned = packet.message?.toLowerCase().includes(BOT_USERNAME.toLowerCase());
+    if (!mentioned) return;
+
+    const now = Date.now();
+    if (now - lastReplyAt < REPLY_COOLDOWN_MS) return;
+    lastReplyAt = now;
+
+    try {
+      const reply = await askAI(packet.source_name, packet.message);
+      client.queue('text', {
+        type: 'chat',
+        needs_translation: false,
+        source_name: BOT_USERNAME,
+        xuid: '',
+        platform_chat_id: '',
+        filtered_message: '',
+        message: reply,
+      });
+    } catch (e) {
+      console.error('⚠️ خطأ في الشات الذكي:', e.message);
+    }
+  });
+}
+
+console.log('=== بدء تشغيل البوت ===');
+console.log('عند ظهور رابط microsoft.com/link مع كود مكوّن من 8 أحرف بالأسفل،');
+console.log('افتحه من متصفح هاتفك وأدخل الكود لربط حسابك.\n');
+
+connectBot();
 
 // ============================================
 // سيرفر HTTP: يبقي Render مستيقظاً عبر UptimeRobot،
