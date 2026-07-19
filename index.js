@@ -156,6 +156,8 @@ function startPhysicsLoop() {
         interaction_model: 'touch',
         tick: physicsTick,
         delta: { x: botVelocity.x, y: botVelocity.y, z: botVelocity.z },
+        analogue_move_vector: { x: 0, z: 0 },
+        camera_orientation: { x: 0, y: 0, z: 1 },
       });
     } catch (e) {
       if (!physicsErrorLogged) {
@@ -212,8 +214,12 @@ function connectBot() {
 
   client.on('start_game', (packet) => {
     // نلتقط موقع البوت الأولي حتى نقدر نحسب حركته بعدين
-    if (packet.player_position) {
-      botPosition = { ...packet.player_position };
+    const pos = packet.player_position || packet.position;
+    if (pos && typeof pos.x === 'number') {
+      botPosition = { x: pos.x, y: pos.y, z: pos.z };
+      console.log('📍 تم التقاط موقع البوت الأولي:', JSON.stringify(botPosition));
+    } else {
+      console.log('⚠️ لم يتم العثور على حقل الموقع بحزمة start_game — الحركة لن تعمل.');
     }
     if (typeof packet.rotation?.x === 'number') botPitch = packet.rotation.x;
     if (typeof packet.rotation?.y === 'number') botYaw = packet.rotation.y;
