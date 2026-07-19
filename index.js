@@ -144,24 +144,20 @@ function startPhysicsLoop() {
     physicsTick += 1n;
 
     try {
-      client.queue('player_auth_input', {
+      client.queue('move_player', {
+        runtime_id: client.entityId,
+        position: botPosition,
         pitch: botPitch,
         yaw: botYaw,
-        position: botPosition,
-        move_vector: { x: 0, z: 0 },
         head_yaw: botHeadYaw,
-        input_data: [],
-        input_mode: 'mouse',
-        play_mode: 'normal',
-        interaction_model: 'touch',
+        mode: 'normal',
+        on_ground: true,
+        ridden_runtime_id: 0n,
         tick: physicsTick,
-        delta: { x: botVelocity.x, y: botVelocity.y, z: botVelocity.z },
-        analogue_move_vector: { x: 0, z: 0 },
-        camera_orientation: { x: 0, y: 0, z: 1 },
       });
     } catch (e) {
       if (!physicsErrorLogged) {
-        console.error('⚠️ خطأ بإرسال حزمة الحركة (player_auth_input):', e.message);
+        console.error('⚠️ خطأ بإرسال حزمة الحركة (move_player):', e.message);
         physicsErrorLogged = true;
       }
     }
