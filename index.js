@@ -139,6 +139,15 @@ function connectBot() {
     console.log('🚪 البوت في طور الانضمام للسيرفر...');
   });
 
+  client.on('play_status', (packet) => {
+    if (packet.status === 'player_spawn') {
+      // بدون هذه الحزمة، السيرفر يعتبر البوت لسا بشاشة التحميل
+      // حتى لو ظهر داخل العالم — وهذا سبب بقاءه "عالق" وما يندمج فعلياً.
+      client.write('serverbound_loading_screen', { type: 2 });
+      console.log('✅ تم تأكيد إنهاء شاشة التحميل (serverbound_loading_screen).');
+    }
+  });
+
   client.on('spawn', () => {
     console.log('🎮 البوت الآن داخل السيرفر وظاهر في العالم.');
     hasSpawnedOnce = true;
