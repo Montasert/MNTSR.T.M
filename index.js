@@ -261,13 +261,14 @@ function connectBot() {
       const text = pickReply(isSerious ? SERIOUS_HIT_REPLIES : LIGHT_HIT_REPLIES);
       try {
         client.queue('text', {
-          type: 'chat',
           needs_translation: false,
+          category: 1,
+          type: 'chat',
           source_name: BOT_USERNAME,
+          message: text,
           xuid: '',
           platform_chat_id: '',
-          filtered_message: '',
-          message: text,
+          has_filtered_message: false,
         });
       } catch (e) {
         console.error('⚠️ خطأ بإرسال رد فعل الضرب:', e.message);
@@ -311,13 +312,14 @@ function connectBot() {
     try {
       const reply = await askAI(packet.source_name, packet.message);
       client.queue('text', {
-        type: 'chat',
         needs_translation: false,
+        category: 1,
+        type: 'chat',
         source_name: BOT_USERNAME,
+        message: reply,
         xuid: '',
         platform_chat_id: '',
-        filtered_message: '',
-        message: reply,
+        has_filtered_message: false,
       });
     } catch (e) {
       console.error('⚠️ خطأ في الشات الذكي:', e.message);
