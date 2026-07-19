@@ -109,6 +109,68 @@ let client = null;
 let reconnectTimer = null;
 let hasSpawnedOnce = false; // نطبع رسائل تسجيل الدخول مرة وحدة بس
 
+// ============================================
+// فيزياء أساسية: تطبيق الارتداد (Knockback) عند الضرب
+// ============================================
+let botPosition = null;         // {x, y, z}
+let botVelocity = { x: 0, y: 0, z: 0 };
+let botYaw = 0, botPitch = 0, botHeadYaw = 0;
+let physicsTick = 0n;
+let physicsInterval = null;
+let physicsErrorLogged = false; // نطبع خطأ الفيزياء مرة وحدة بس حتى ما نغرق السجل
+
+const GRAVITY = 0.08;
+const DRAG = 0.98;
+const FRICTION = 0.6; // تباطؤ الحركة الأفقية تدريجياً بعد الضربة
+
+function startPhysicsLoop() {
+  stopPhysicsLoop();
+  physicsInterval = setInterval(() => {
+    if (!botPosition || !client) return;
+
+    // جاذبية بسيطة + مقاومة هواء
+    botVelocity.y -= GRAVITY;
+    botVelocity.y *= DRAG;
+
+    // تحديث الموقع فعلياً
+    botPosition.x += botVelocity.x;
+    botPosition.y += botVelocity.y;
+    botPosition.z += botVelocity.z;
+
+    // احتكاك أفقي: يبطّئ الارتداد تدريجياً بدل ما يستمر للأبد
+    botVelocity.x *= FRICTION;
+    botVelocity.z *= FRICTION;
+
+    physicsTick += 1n;
+
+    try {
+      client.queue('player_auth_input', {
+        pitch: botPitch,
+        yaw: botYaw,
+        position: botPosition,
+        move_vector: { x: 0, z: 0 },
+        head_yaw: botHeadYaw,
+        input_data: [],
+        input_mode: 'mouse',
+        play_mode: 'normal',
+        interaction_model: 'touch',
+        tick: physicsTick,
+        delta: { x: botVelocity.x, y: botVelocity.y, z: botVelocity.z },
+      });
+    } catch (e) {
+      if (!physicsErrorLogged) {
+        console.error('⚠️ خطأ بإرسال حزمة الحركة (player_auth_input):', e.message);
+        physicsErrorLogged = true;
+      }
+    }
+  }, 50); // 20 مرة بالثانية تقريباً
+}
+
+function stopPhysicsLoop() {
+  if (physicsInterval) clearInterval(physicsInterval);
+  physicsInterval = null;
+}
+
 function scheduleReconnect(delayMs, reasonText) {
   if (reconnectTimer) return; // في محاولة إعادة اتصال مجدولة أصلاً
   console.log(`🔁 إعادة محاولة الاتصال خلال ${Math.round(delayMs / 1000)} ثانية بسبب: ${reasonText}`);
@@ -148,6 +210,28 @@ function connectBot() {
     }
   });
 
+  client.on('start_game', (packet) => {
+    // نلتقط موقع البوت الأولي حتى نقدر نحسب حركته بعدين
+    if (packet.player_position) {
+      botPosition = { ...packet.player_position };
+    }
+    if (typeof packet.rotation?.x === 'number') botPitch = packet.rotation.x;
+    if (typeof packet.rotation?.y === 'number') botYaw = packet.rotation.y;
+  });
+
+  client.on('set_entity_motion', (packet) => {
+    if (!botPosition) return;
+    const myId = String(client.entityId);
+    const entry = packet.entries?.find(e => String(e.runtime_entity_id) === myId);
+    if (entry?.velocity) {
+      // نضيف قوة الدفع اللي أرسلها السيرفر — هاي فعلياً الارتداد الحقيقي
+      botVelocity.x += entry.velocity.x;
+      botVelocity.y += entry.velocity.y;
+      botVelocity.z += entry.velocity.z;
+      console.log('💥 البوت انضرب — تطبيق ارتداد طبيعي للخلف.');
+    }
+  });
+
   client.on('spawn', () => {
     console.log('🎮 البوت الآن داخل السيرفر وظاهر في العالم.');
     hasSpawnedOnce = true;
@@ -158,12 +242,14 @@ function connectBot() {
         runtime_entity_id: client.entityId,
       });
       console.log('✅ تم تأكيد اندماج البوت بالعالم (set_local_player_as_initialized).');
+      startPhysicsLoop();
     } catch (e) {
       console.error('⚠️ تعذّر إرسال تأكيد الاندماج:', e.message);
     }
   });
 
   client.on('disconnect', (packet) => {
+    stopPhysicsLoop();
     const reason = packet?.reason || 'غير معروف';
     console.log('❌ تم فصل البوت. السبب:', reason);
     // تعارض مؤقت بسبب إعادة نشر: ننتظر أطول شوي حتى تنغلق الجلسة القديمة تماماً
