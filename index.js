@@ -145,19 +145,20 @@ function startPhysicsLoop() {
 
     try {
       client.queue('move_player', {
-        runtime_id: BigInt(client.entityId),
+        runtime_id: client.entityId,
         position: botPosition,
         pitch: botPitch,
         yaw: botYaw,
         head_yaw: botHeadYaw,
         mode: 'normal',
         on_ground: true,
-        ridden_runtime_id: BigInt(0),
+        ridden_runtime_id: 0,
         tick: physicsTick,
       });
     } catch (e) {
       if (!physicsErrorLogged) {
-        console.error('⚠️ خطأ بإرسال حزمة الحركة (move_player):', e.message);
+        console.error('⚠️ خطأ بإرسال حزمة الحركة (move_player):', e.message,
+          '| نوع entityId:', typeof client.entityId, client.entityId);
         physicsErrorLogged = true;
       }
     }
