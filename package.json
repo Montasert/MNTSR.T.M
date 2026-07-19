@@ -1,12 +1,12 @@
 {
   "name": "mc-bedrock-player-bot",
-  "version": "2.0.0",
-  "description": "Minecraft Bedrock Player Bot - Microsoft Auth + bedrockflayer + Gemini AI",
+  "version": "1.0.0",
+  "description": "Minecraft Bedrock Player Bot - Microsoft Auth + Gemini AI",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "bedrockflayer": "github:torzodmc/mineflayer-for-bedrock"
+    "bedrock-protocol": "^3.42.0"
   }
 }

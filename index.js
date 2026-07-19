@@ -1,18 +1,19 @@
 // ============================================
-// Minecraft Bedrock Player Bot - v2
-// مبني على bedrockflayer (يوفر: حركة، فيزياء، قتال، بناء، كسر)
-// + Gemini AI للشات + نظام مزاج
+// Minecraft Bedrock Player Bot - Microsoft Auth
+// نسخة مستقرة: بدون حركة فيزيائية (غير ممكنة حالياً
+// بسبب علة في بروتوكول 1.26.30 نفسه)، الذكاء الاصطناعي
+// يتحكم بالشخصية والقرارات والردود بالكامل.
 // ============================================
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { createBot, GoalFollow, GoalXZ } = require('bedrockflayer');
+const bedrock = require('bedrock-protocol');
 
 // ---- إعدادات البوت ----
 const SERVER_HOST = process.env.SERVER_HOST || 'play.example.com';
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '19132');
 const BOT_USERNAME = process.env.BOT_USERNAME || 'MyPlayerBot';
-const MC_VERSION   = process.env.MC_VERSION   || '1.26.30';
+const MC_VERSION   = process.env.MC_VERSION   || '1.26.33';
 
 // ============================================
 // حفظ/استعادة جلسة تسجيل الدخول عبر متغير بيئة
@@ -134,14 +135,29 @@ function pickReply(list) {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+function sendChat(client, text) {
+  try {
+    client.queue('text', {
+      needs_translation: false,
+      category: 1,
+      type: 'chat',
+      source_name: BOT_USERNAME,
+      message: text,
+      xuid: '',
+      platform_chat_id: '',
+      has_filtered_message: false,
+    });
+  } catch (e) {
+    console.error('⚠️ خطأ بإرسال رسالة شات:', e.message);
+  }
+}
+
 // ============================================
 // إدارة الاتصال + إعادة الاتصال التلقائي
 // ============================================
-let bot = null;
+let client = null;
 let reconnectTimer = null;
-let lastHealth = null;
-let wanderInterval = null;
-let fleeingUntil = 0;
+let hasSpawnedOnce = false;
 
 function scheduleReconnect(delayMs, reasonText) {
   if (reconnectTimer) return;
@@ -152,31 +168,10 @@ function scheduleReconnect(delayMs, reasonText) {
   }, delayMs);
 }
 
-function startWandering() {
-  stopWandering();
-  // كل 20-40 ثانية، يمشي خطوات قليلة عشوائية حوله — إحساس "حياة" بسيط وآمن
-  wanderInterval = setInterval(() => {
-    if (!bot || !bot.entity || Date.now() < fleeingUntil) return;
-    try {
-      const p = bot.entity.position;
-      const dx = (Math.random() - 0.5) * 6;
-      const dz = (Math.random() - 0.5) * 6;
-      bot.pathfinder.goto(new GoalXZ(p.x + dx, p.z + dz)).catch(() => {});
-    } catch (e) {
-      // نتجاهل أخطاء التجول الفردية حتى ما توقف البوت
-    }
-  }, 25000 + Math.random() * 15000);
-}
-
-function stopWandering() {
-  if (wanderInterval) clearInterval(wanderInterval);
-  wanderInterval = null;
-}
-
 function connectBot() {
   console.log('=== محاولة الاتصال بالسيرفر ===');
 
-  bot = createBot({
+  client = bedrock.createClient({
     host: SERVER_HOST,
     port: SERVER_PORT,
     username: BOT_USERNAME,
@@ -185,83 +180,113 @@ function connectBot() {
     profilesFolder: PROFILES_FOLDER,
   });
 
-  bot.on('spawn', () => {
-    console.log('🎮 البوت الآن داخل السيرفر، مندمج بالكامل ويقدر يتحرك فعلياً.');
-    lastHealth = bot.health;
-    startWandering();
-    setTimeout(() => {
-      if (!process.env.MSA_CACHE) buildSessionCacheString();
-    }, 2000);
+  client.on('session', () => {
+    console.log('✅ تم ربط الحساب وتسجيل الدخول بنجاح.');
+    if (!process.env.MSA_CACHE) buildSessionCacheString();
   });
 
-  bot.on('health', () => {
-    if (lastHealth !== null && bot.health < lastHealth) {
-      const isSerious = registerHit();
-      console.log(`💥 البوت انضرب (${isSerious ? 'هجوم جدي' : 'ضربة خفيفة'}) — الانزعاج: ${annoyance}`);
-
-      if (isSerious) {
-        // هروب فعلي: يمشي بعيد بشكل عشوائي لمدة قصيرة
-        fleeingUntil = Date.now() + 4000;
-        try {
-          const p = bot.entity.position;
-          const angle = Math.random() * Math.PI * 2;
-          const fx = p.x + Math.cos(angle) * 6;
-          const fz = p.z + Math.sin(angle) * 6;
-          bot.pathfinder.goto(new GoalXZ(fx, fz)).catch(() => {});
-        } catch (e) {
-          console.error('⚠️ خطأ بمحاولة الهروب:', e.message);
-        }
-      }
-
-      if (!isSerious || !GEMINI_API_KEY) {
-        bot.chat(pickReply(isSerious ? SERIOUS_HIT_REPLIES : LIGHT_HIT_REPLIES));
-      }
-    }
-    lastHealth = bot.health;
+  client.on('join', () => {
+    console.log('🚪 البوت في طور الانضمام للسيرفر...');
   });
 
-  bot.on('death', () => {
-    console.log('☠️ البوت مات.');
-    stopWandering();
+  let runtimeEntityId = null;
+  let isDead = false;
+
+  client.on('start_game', (packet) => {
+    runtimeEntityId = packet.runtime_entity_id;
+    console.log('📍 تم حفظ معرّف الكيان:', String(runtimeEntityId));
+
+    // نمط مؤكد من مجتمع bedrock-protocol لحل مشكلة "الخلود/العالق"
     try {
-      bot.chat(pickReply(DEATH_REPLIES));
-    } catch (e) { /* تجاهل */ }
+      client.queue('serverbound_loading_screen', { type: 1 });
+      client.queue('serverbound_loading_screen', { type: 2 });
+      client.queue('interact', {
+        action_id: 'mouse_over_entity',
+        target_entity_id: 0n,
+        position: { x: 0, y: 0, z: 0 },
+      });
+      client.queue('set_local_player_as_initialized', {
+        runtime_entity_id: String(runtimeEntityId),
+      });
+      console.log('✅ تم تطبيق تسلسل الاندماج الكامل بالعالم.');
+    } catch (e) {
+      console.error('⚠️ خطأ بتسلسل الاندماج:', e.message);
+    }
   });
 
-  bot.on('chat', async (username, message) => {
-    if (username === BOT_USERNAME) return;
+  client.on('set_entity_motion', (packet) => {
+    if (runtimeEntityId === null) return;
+    const myId = String(runtimeEntityId);
+    const entry = packet.entries?.find(e => String(e.runtime_entity_id) === myId);
+    if (!entry?.velocity) return;
+
+    const isSerious = registerHit();
+    console.log(`💥 البوت انضرب (${isSerious ? 'هجوم جدي' : 'ضربة خفيفة'}) — مستوى الانزعاج: ${annoyance}`);
+
+    if (!isSerious || !GEMINI_API_KEY) {
+      sendChat(client, pickReply(isSerious ? SERIOUS_HIT_REPLIES : LIGHT_HIT_REPLIES));
+    }
+  });
+
+  client.on('update_attributes', (packet) => {
+    if (runtimeEntityId === null) return;
+    if (String(packet.runtime_entity_id) !== String(runtimeEntityId)) return;
+
+    const healthAttr = packet.attributes?.find(a => a.name === 'minecraft:health');
+    if (!healthAttr) return;
+
+    if (healthAttr.value <= 0 && !isDead) {
+      isDead = true;
+      console.log('☠️ البوت مات.');
+      sendChat(client, pickReply(DEATH_REPLIES));
+    } else if (healthAttr.value > 0 && isDead) {
+      isDead = false;
+      console.log('❤️ البوت رجع حي (respawn).');
+    }
+  });
+
+  client.on('spawn', () => {
+    console.log('🎮 البوت الآن داخل السيرفر وظاهر في العالم.');
+    hasSpawnedOnce = true;
+  });
+
+  client.on('disconnect', (packet) => {
+    const reason = packet?.reason || 'غير معروف';
+    console.log('❌ تم فصل البوت. السبب:', reason);
+    const delay = reason === 'server_id_conflict' ? 20000 : 10000;
+    scheduleReconnect(delay, reason);
+  });
+
+  client.on('kick', (reason) => {
+    console.log('⛔ تم طرد البوت من السيرفر:', reason);
+  });
+
+  client.on('error', (err) => {
+    console.error('⚠️ خطأ في الاتصال:', err.message);
+  });
+
+  client.on('text', async (packet) => {
+    if (packet.type !== 'chat') return;
+    if (packet.source_name === BOT_USERNAME) return;
     if (!GEMINI_API_KEY) return;
-    if (!message?.toLowerCase().includes(BOT_USERNAME.toLowerCase())) return;
+
+    const mentioned = packet.message?.toLowerCase().includes(BOT_USERNAME.toLowerCase());
+    if (!mentioned) return;
 
     const now = Date.now();
     if (now - lastReplyAt < REPLY_COOLDOWN_MS) return;
     lastReplyAt = now;
 
     try {
-      const reply = await askAI(username, message);
-      bot.chat(reply);
+      const reply = await askAI(packet.source_name, packet.message);
+      sendChat(client, reply);
     } catch (e) {
       console.error('⚠️ خطأ في الشات الذكي:', e.message);
     }
   });
-
-  bot.on('kicked', (reason) => {
-    console.log('⛔ تم طرد البوت من السيرفر:', reason);
-  });
-
-  bot.on('end', (reason) => {
-    stopWandering();
-    console.log('❌ انتهى الاتصال. السبب:', reason);
-    const delay = String(reason).includes('server_id_conflict') ? 20000 : 10000;
-    scheduleReconnect(delay, reason);
-  });
-
-  bot.on('error', (err) => {
-    console.error('⚠️ خطأ في الاتصال:', err.message);
-  });
 }
 
-console.log('=== بدء تشغيل البوت (بنية bedrockflayer) ===');
+console.log('=== بدء تشغيل البوت ===');
 console.log('عند ظهور رابط microsoft.com/link مع كود مكوّن من 8 أحرف بالأسفل،');
 console.log('افتحه من متصفح هاتفك وأدخل الكود لربط حسابك.\n');
 
