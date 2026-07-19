@@ -7,6 +7,6 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "bedrockflayer": "^1.0.0"
+    "bedrockflayer": "github:torzodmc/mineflayer-for-bedrock"
   }
 }
