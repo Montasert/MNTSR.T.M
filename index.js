@@ -145,14 +145,14 @@ function startPhysicsLoop() {
 
     try {
       client.queue('move_player', {
-        runtime_id: client.entityId,
+        runtime_id: BigInt(client.entityId),
         position: botPosition,
         pitch: botPitch,
         yaw: botYaw,
         head_yaw: botHeadYaw,
         mode: 'normal',
         on_ground: true,
-        ridden_runtime_id: 0n,
+        ridden_runtime_id: BigInt(0),
         tick: physicsTick,
       });
     } catch (e) {
