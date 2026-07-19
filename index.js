@@ -58,7 +58,7 @@ restoreSessionFromEnv();
 // الشات الذكي (Gemini API)
 // ============================================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 const BOT_PERSONA_BASE = process.env.BOT_PERSONA ||
   `أنت لاعب عادي بشخصية ${BOT_USERNAME} داخل سيرفر ماين كرافت. تتكلم بالعامية بشكل طبيعي جداً،
