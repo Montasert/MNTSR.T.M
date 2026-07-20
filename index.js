@@ -59,7 +59,7 @@ restoreSessionFromEnv();
 // الذكاء الاصطناعي (Gemini API) + نظام المزاج
 // ============================================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
 const BOT_PERSONA_BASE = process.env.BOT_PERSONA ||
   `أنت لاعب عادي بشخصية ${BOT_USERNAME} داخل سيرفر ماين كرافت. تتكلم بالعامية بشكل طبيعي جداً،
@@ -89,6 +89,27 @@ const HISTORY_LIMIT = 6;
 let lastReplyAt = 0;
 const REPLY_COOLDOWN_MS = 4000;
 
+async function callGemini(contents) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  const opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+    body: JSON.stringify({ contents }),
+  };
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(url, opts);
+    if (res.ok) return res.json();
+
+    // 503 (ازدحام مؤقت) و429 (تجاوز الحصة اللحظية) تستحق إعادة محاولة قصيرة
+    if ((res.status === 503 || res.status === 429) && attempt < 3) {
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+      continue;
+    }
+    throw new Error(`Gemini API error: ${res.status} ${await res.text()}`);
+  }
+}
+
 async function askAI(playerName, message) {
   const history = chatHistory.get(playerName) || [];
   const contents = [
@@ -98,16 +119,7 @@ async function askAI(playerName, message) {
     { role: 'user', parts: [{ text: `${playerName}: ${message}` }] },
   ];
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
-      body: JSON.stringify({ contents }),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini API error: ${res.status} ${await res.text()}`);
-  const data = await res.json();
+  const data = await callGemini(contents);
   const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!reply) throw new Error('رد فارغ من الذكاء الاصطناعي');
 
